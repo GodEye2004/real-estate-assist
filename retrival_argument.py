@@ -2,52 +2,73 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import json
 import openai
-import os
 
-# بارگذاری کلید API از فایل .env (اختیاری و امن‌تر)
+# ست کردن مستقیم API key
 openai.api_key = "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"
 
 app = FastAPI()
 
-# بارگذاری داده‌های قرارداد
+# Load contract data
 with open("contract_text.json", "r", encoding="utf-8") as f:
     contract = json.load(f)
 
+
 @app.post("/ask")
 async def ask_question(request: Request):
+    # Check if API key is available
+    if not openai.api_key:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "OpenAI API key is missing."}
+        )
+
     body = await request.json()
-    question = body.get("question", "")
+    question = body.get("question", "").strip()
 
-    # ساخت پرامپت دقیق و فارسی
+    if not question:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Question field is required."}
+        )
+
     prompt = f"""
-    تو یک دستیار هوشمند فارسی‌زبان هستی که وظیفه‌ات پاسخ‌گویی و تحلیل سوالات مربوط به قرارداد زیر است.
+تو یک دستیار هوشمند فارسی‌زبان هستی که وظیفه‌ات پاسخ‌گویی و تحلیل سوالات مربوط به قرارداد زیر است.
 
-    نقش طرفین در این قرارداد:
-    - طرف اول: شرکت هومنگر
-    - طرف دوم: مشتری
+نقش طرفین در این قرارداد:
+- طرف اول: شرکت هومنگر
+- طرف دوم: مشتری
 
-    وظیفه تو:
-    - پاسخ‌گویی دقیق و رسمی به سوالات
-    - اگر اطلاعات مستقیم وجود ندارد، از زمینه قرارداد تحلیل منطقی ارائه بده
-    - پاسخ باید کوتاه، مستدل و با نگارش رسمی فارسی باشد
-    - از هیچ منبع خارجی استفاده نکن، فقط بر اساس اطلاعات قرارداد تحلیل کن
-    - اگر هیچ اطلاعات یا زمینه‌ای وجود ندارد، محترمانه اعلام کن
+وظیفه تو:
+- پاسخ‌گویی دقیق و رسمی به سوالات
+- اگر اطلاعات مستقیم وجود ندارد، از زمینه قرارداد تحلیل منطقی ارائه بده
+- پاسخ باید کوتاه، مستدل و با نگارش رسمی فارسی باشد
+- از هیچ منبع خارجی استفاده نکن، فقط بر اساس اطلاعات قرارداد تحلیل کن
+- اگر هیچ اطلاعات یا زمینه‌ای وجود ندارد، محترمانه اعلام کن
 
-    اطلاعات قرارداد:
-    {json.dumps(contract, ensure_ascii=False, indent=2)}
+اطلاعات قرارداد:
+{json.dumps(contract, ensure_ascii=False, indent=2)}
 
-    سوال: {question}
-    پاسخ را فقط بر اساس اطلاعات بالا، به زبان فارسی و با نگارش رسمی بنویس.
-    """
+سوال: {question}
+پاسخ را فقط بر اساس اطلاعات بالا، به زبان فارسی و با نگارش محاوره ایی و صمیمی بنویس.
+"""
 
-    # فراخوانی مدل GPT-4o-mini
-    response = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
-    )
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        answer = response.choices[0].message.content.strip()
+        return JSONResponse(content={"answer": answer})
 
-    # استخراج پاسخ
-    answer = response.choices[0].message.content.strip()
+    except openai.AuthenticationError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "OpenAI API key is invalid or expired."}
+        )
 
-    return JSONResponse(content={"answer": answer})
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Internal server error: {str(e)}"}
+        )

@@ -4,7 +4,7 @@ import json
 import openai
 
 # ست کردن مستقیم API key
-openai.api_key = "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"
+openai.api_key = "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"
 
 app = FastAPI()
 

@@ -1,17 +1,26 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import openai
 
 # ست کردن مستقیم API key
-openai.api_key = "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"
+openai.api_key = "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"
 
 app = FastAPI()
+
+# Enable CORS for Flutter (and Postman testing)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Load contract data
 with open("contract_text.json", "r", encoding="utf-8") as f:
     contract = json.load(f)
-
 
 @app.post("/ask")
 async def ask_question(request: Request):
@@ -22,7 +31,15 @@ async def ask_question(request: Request):
             content={"error": "OpenAI API key is missing."}
         )
 
-    body = await request.json()
+    # Parse request body
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON payload."}
+        )
+
     question = body.get("question", "").strip()
 
     if not question:
@@ -31,26 +48,26 @@ async def ask_question(request: Request):
             content={"error": "Question field is required."}
         )
 
+    # Keep your original prompt
     prompt = f"""
-تو یک دستیار هوشمند فارسی‌زبان هستی که وظیفه‌ات پاسخ‌گویی و تحلیل سوالات مربوط به قرارداد زیر است.
+    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد پاسخ بدهی.
 
-نقش طرفین در این قرارداد:
-- طرف اول: شرکت هومنگر
-- طرف دوم: مشتری
+    هدف:
+    - کمک کن کاربر بفهمه مفاد قرارداد چه معنی و اهمیتی دارند.
+    - حتی اگر جواب مستقیم در قرارداد نبود، تحلیل و دلیل منطقی بیاور.
 
-وظیفه تو:
-- پاسخ‌گویی دقیق و رسمی به سوالات
-- اگر اطلاعات مستقیم وجود ندارد، از زمینه قرارداد تحلیل منطقی ارائه بده
-- پاسخ باید کوتاه، مستدل و با نگارش رسمی فارسی باشد
-- از هیچ منبع خارجی استفاده نکن، فقط بر اساس اطلاعات قرارداد تحلیل کن
-- اگر هیچ اطلاعات یا زمینه‌ای وجود ندارد، محترمانه اعلام کن
+    سبک پاسخ:
+    - کوتاه و محاوره‌ای باش.
+    - ساده توضیح بده چرا بخش‌های مختلف قرارداد مهم هستند.
+    - از عبارت‌های خشک یا رسمی بیش از حد استفاده نکن.
 
-اطلاعات قرارداد:
-{json.dumps(contract, ensure_ascii=False, indent=2)}
+    اطلاعات قرارداد:
+    {json.dumps(contract, ensure_ascii=False, indent=2)}
 
-سوال: {question}
-پاسخ را فقط بر اساس اطلاعات بالا، به زبان فارسی و با نگارش محاوره ایی و صمیمی بنویس.
-"""
+    سوال کاربر: {question}
+
+    جواب را طوری بنویس که کاربر احساس کند یک مشاور دلسوز با او صحبت می‌کند.
+    """
 
     try:
         response = openai.chat.completions.create(

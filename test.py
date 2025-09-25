@@ -1,0 +1,4 @@
+import openai
+openai.api_key = "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"
+
+print(openai.models.list())

@@ -3,70 +3,61 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import openai
+from supabase import create_client, Client
 
-# ست کردن مستقیم API key
-openai.api_key = "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"
+# --- CONFIG ---
+openai.api_key = "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"
+
+SUPABASE_URL = "https://wblcutafmsztpgrzcbyy.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndibGN1dGFmbXN6dHBncnpjYnl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwNjY0NTAsImV4cCI6MjA3NDY0MjQ1MH0.jwiEUI2BFkh3f-M4B7K0DC5UMLJ_L_ZdWYlvh8CcgXU"
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# Enable CORS for Flutter (and Postman testing)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load contract data
 with open("contract_text.json", "r", encoding="utf-8") as f:
     contract = json.load(f)
 
 @app.post("/ask")
 async def ask_question(request: Request):
-    # Check if API key is available
     if not openai.api_key:
-        return JSONResponse(
-            status_code=500,
-            content={"error": "OpenAI API key is missing."}
-        )
+        return JSONResponse(status_code=500, content={"error": "OpenAI API key is missing."})
 
-    # Parse request body
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Invalid JSON payload."}
-        )
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON payload."})
 
     question = body.get("question", "").strip()
-
     if not question:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Question field is required."}
-        )
+        return JSONResponse(status_code=400, content={"error": "Question field is required."})
 
-    # Keep your original prompt
     prompt = f"""
-    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد پاسخ بدهی.
+    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد جواب کوتاه و محاوره‌ای بدی.
 
     هدف:
-    - کمک کن کاربر بفهمه مفاد قرارداد چه معنی و اهمیتی دارند.
-    - حتی اگر جواب مستقیم در قرارداد نبود، تحلیل و دلیل منطقی بیاور.
+    - کمک کن کاربر معنی و اهمیت مفاد قرارداد را بفهمد.
+    - حتی اگر جواب مستقیم نبود، با دلیل منطقی تحلیل کن.
 
     سبک پاسخ:
-    - کوتاه و محاوره‌ای باش.
-    - ساده توضیح بده چرا بخش‌های مختلف قرارداد مهم هستند.
-    - از عبارت‌های خشک یا رسمی بیش از حد استفاده نکن.
+    - کوتاه و ساده باش.
+    - مثل یک مشاور دلسوز حرف بزن، خشک و رسمی نباش.
 
     اطلاعات قرارداد:
-    {json.dumps(contract, ensure_ascii=False, indent=2)}
+    {json.dumps(contract, ensure_ascii=False)}
 
     سوال کاربر: {question}
 
-    جواب را طوری بنویس که کاربر احساس کند یک مشاور دلسوز با او صحبت می‌کند.
+    جواب را کوتاه و روان بده.
     """
 
     try:
@@ -76,16 +67,17 @@ async def ask_question(request: Request):
             temperature=0.3
         )
         answer = response.choices[0].message.content.strip()
+
+        # --- SAVE TO SUPABASE ---
+        try:
+            supabase.table("chat_logs").insert({"question": question, "answer": answer}).execute()
+        except Exception as db_err:
+            print("⚠️ Failed to save to Supabase:", db_err)
+
         return JSONResponse(content={"answer": answer})
 
     except openai.AuthenticationError:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "OpenAI API key is invalid or expired."}
-        )
+        return JSONResponse(status_code=401, content={"error": "OpenAI API key is invalid or expired."})
 
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Internal server error: {str(e)}"}
-        )
+        return JSONResponse(status_code=500, content={"error": f"Internal server error: {str(e)}"})

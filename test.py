@@ -1,4 +1,10 @@
 import openai
-openai.api_key = "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"
 
-print(openai.models.list())
+openai.api_key = "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"
+
+response = openai.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "سلام"}]
+)
+
+print(response.choices[0].message.content)

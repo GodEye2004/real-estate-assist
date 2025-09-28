@@ -1,15 +1,18 @@
+# retrival_argument.py
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import openai
+import os
 from supabase import create_client, Client
 
-# --- CONFIG ---
-openai.api_key = "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"
-
-SUPABASE_URL = "https://wblcutafmsztpgrzcbyy.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndibGN1dGFmbXN6dHBncnpjYnl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwNjY0NTAsImV4cCI6MjA3NDY0MjQ1MH0.jwiEUI2BFkh3f-M4B7K0DC5UMLJ_L_ZdWYlvh8CcgXU"
+# --------------------------
+# CONFIG FROM ENVIRONMENT
+# --------------------------
+openai.api_key = os.getenv("OPENAI_API_KEY")  # Set this in Render Environment Variables
+SUPABASE_URL = os.getenv("SUPABASE_URL")     # Set this in Render Environment Variables
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")     # Set this in Render Environment Variables
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -24,22 +27,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Load contract data
 with open("contract_text.json", "r", encoding="utf-8") as f:
     contract = json.load(f)
 
+# --------------------------
+# POST /ask → Chatbot Q&A
+# --------------------------
 @app.post("/ask")
 async def ask_question(request: Request):
     if not openai.api_key:
-        return JSONResponse(status_code=500, content={"error": "OpenAI API key is missing."})
+        return JSONResponse(
+            status_code=500,
+            content={"error": "OpenAI API key is missing."}
+        )
 
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON payload."})
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON payload."}
+        )
 
     question = body.get("question", "").strip()
     if not question:
-        return JSONResponse(status_code=400, content={"error": "Question field is required."})
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Question field is required."}
+        )
 
     prompt = f"""
     تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد جواب کوتاه و محاوره‌ای بدی.
@@ -70,14 +86,38 @@ async def ask_question(request: Request):
 
         # --- SAVE TO SUPABASE ---
         try:
-            supabase.table("chat_logs").insert({"question": question, "answer": answer}).execute()
+            supabase.table("chat_logs").insert({
+                "question": question,
+                "answer": answer
+            }).execute()
         except Exception as db_err:
             print("⚠️ Failed to save to Supabase:", db_err)
 
         return JSONResponse(content={"answer": answer})
 
     except openai.AuthenticationError:
-        return JSONResponse(status_code=401, content={"error": "OpenAI API key is invalid or expired."})
+        return JSONResponse(
+            status_code=401,
+            content={"error": "OpenAI API key is invalid or expired."}
+        )
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Internal server error: {str(e)}"})
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Internal server error: {str(e)}"}
+        )
+
+
+# --------------------------
+# GET /logs → View chat history
+# --------------------------
+@app.get("/logs")
+async def get_logs():
+    try:
+        result = supabase.table("chat_logs").select("*").order("created_at", desc=True).execute()
+        return {"data": result.data}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to fetch logs: {str(e)}"}
+        )

@@ -23,6 +23,7 @@ if not OPENAI_API_KEY:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY. Please set them in your .env or environment.")
 
+print("hello")
 # Initialize clients
 client = OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

@@ -62,13 +62,23 @@ async def ask_question(request: Request):
         return JSONResponse(status_code=400, content={"error": "Question field is required."})
 
     prompt = f"""
-تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد جواب کوتاه و محاوره‌ای بدی.
+    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد جواب کوتاه و محاوره‌ای بدی.
 
-اطلاعات قرارداد:
-{json.dumps(contract, ensure_ascii=False)}
+    هدف:
+    - کمک کن کاربر معنی و اهمیت مفاد قرارداد را بفهمد.
+    - حتی اگر جواب مستقیم نبود، با دلیل منطقی تحلیل کن.
 
-سوال کاربر: {question}
-"""
+    سبک پاسخ:
+    - کوتاه و ساده باش.
+    - مثل یک مشاور دلسوز حرف بزن، خشک و رسمی نباش.
+
+    اطلاعات قرارداد:
+    {json.dumps(contract, ensure_ascii=False)}
+
+    سوال کاربر: {question}
+
+    جواب را کوتاه و روان بده.
+    """
 
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",

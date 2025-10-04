@@ -48,6 +48,15 @@ except FileNotFoundError:
     raise FileNotFoundError("❌ contract_text.json not found.")
 
 # --------------------------
+# Load clothes store file (new addition)
+# --------------------------
+try:
+    with open("clothes_store.json", "r", encoding="utf-8") as f:
+        clothes_store = json.load(f)
+except FileNotFoundError:
+    raise FileNotFoundError("❌ clothes_store.json not found.")
+
+# --------------------------
 # POST /ask → GitHub Models Q&A
 # --------------------------
 @app.post("/ask")
@@ -62,11 +71,12 @@ async def ask_question(request: Request):
         return JSONResponse(status_code=400, content={"error": "Question field is required."})
 
     prompt = f"""
-    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد جواب کوتاه و محاوره‌ای بدی.
+    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد یا اطلاعات فروشگاه لباس جواب کوتاه و محاوره‌ای بدی.
 
     هدف:
-    - کمک کن کاربر معنی و اهمیت مفاد قرارداد را بفهمد.
+    - کمک کن کاربر معنی و اهمیت مفاد قرارداد یا جزئیات فروشگاه لباس را بفهمد.
     - حتی اگر جواب مستقیم نبود، با دلیل منطقی تحلیل کن.
+    - اول تشخیص بده سوال درباره قرارداد هست یا فروشگاه لباس. اگر درباره قرارداد بود، فقط از اطلاعات قرارداد استفاده کن. اگر درباره فروشگاه لباس بود، فقط از اطلاعات فروشگاه استفاده کن. اگر نامشخص بود، بپرس برای شفاف‌سازی.
 
     سبک پاسخ:
     - کوتاه و ساده باش.
@@ -74,6 +84,9 @@ async def ask_question(request: Request):
 
     اطلاعات قرارداد:
     {json.dumps(contract, ensure_ascii=False)}
+
+    اطلاعات فروشگاه لباس:
+    {json.dumps(clothes_store, ensure_ascii=False)}
 
     سوال کاربر: {question}
 

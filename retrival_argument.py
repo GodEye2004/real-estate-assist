@@ -42,7 +42,7 @@ app.add_middleware(
 
 # Load contract data
 try:
-    with open("contract_text.json", "r", encoding="utf-8") as f:
+    with open("knowledge/contract_text.json", "r", encoding="utf-8") as f:
         contract = json.load(f)
 except FileNotFoundError:
     raise FileNotFoundError("❌ contract_text.json file not found. Please make sure it exists.")

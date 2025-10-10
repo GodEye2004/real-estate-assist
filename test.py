@@ -1,137 +1,153 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import json
-import httpx
+import os, json
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from langgraph.graph import StateGraph
+from typing import TypedDict
+import httpx
 
-# --------------------------
-# LOAD .env CONFIG
-# --------------------------
+# ----------------------------
+# بارگذاری محیط
+# ----------------------------
 load_dotenv()
-
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # your GitHub token
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-if not GITHUB_TOKEN:
-    raise ValueError("❌ Missing GITHUB_TOKEN in .env")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Missing Supabase config")
+if not all([GITHUB_TOKEN, SUPABASE_URL, SUPABASE_KEY]):
+    raise ValueError("❌ Missing environment variables!")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --------------------------
-# FastAPI app
-# --------------------------
-app = FastAPI()
+# ----------------------------
+# خواندن داده‌های دانش
+# ----------------------------
+knowledge_dir = "knowledge"
+knowledge_data = {}
+if not os.path.exists(knowledge_dir):
+    os.makedirs(knowledge_dir)
 
-# Enable CORS for Flutter Web / any frontend
+for fname in os.listdir(knowledge_dir):
+    if fname.endswith(".json"):
+        topic = fname.replace(".json", "")
+        with open(os.path.join(knowledge_dir, fname), "r", encoding="utf-8") as f:
+            knowledge_data[topic] = json.load(f)
+
+print("✅ Loaded topics:", list(knowledge_data.keys()))
+
+# ----------------------------
+# FastAPI setup
+# ----------------------------
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # در production بهتره فقط دامنه‌های مورد نظر بذاری
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --------------------------
-# Load contract file
-# --------------------------
-try:
-    with open("contract_text.json", "r", encoding="utf-8") as f:
-        contract = json.load(f)
-except FileNotFoundError:
-    raise FileNotFoundError("❌ contract_text.json not found.")
 
-# --------------------------
-# Load clothes store file (new addition)
-# --------------------------
-try:
-    with open("clothes_store.json", "r", encoding="utf-8") as f:
-        clothes_store = json.load(f)
-except FileNotFoundError:
-    raise FileNotFoundError("❌ clothes_store.json not found.")
+# ----------------------------
+# تعریف State
+# ----------------------------
+class QAState(TypedDict, total=False):
+    question: str
+    answer: str
 
-# --------------------------
-# POST /ask → GitHub Models Q&A
-# --------------------------
-@app.post("/ask")
-async def ask_question(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON body."})
 
-    question = body.get("question", "").strip()
-    if not question:
-        return JSONResponse(status_code=400, content={"error": "Question field is required."})
-
-    prompt = f"""
-    تو یک دستیار فارسی‌زبان هستی و باید به سوالات درباره این قرارداد یا اطلاعات فروشگاه لباس جواب کوتاه و محاوره‌ای بدی.
-
-    هدف:
-    - کمک کن کاربر معنی و اهمیت مفاد قرارداد یا جزئیات فروشگاه لباس را بفهمد.
-    - حتی اگر جواب مستقیم نبود، با دلیل منطقی تحلیل کن.
-    - اول تشخیص بده سوال درباره قرارداد هست یا فروشگاه لباس. اگر درباره قرارداد بود، فقط از اطلاعات قرارداد استفاده کن. اگر درباره فروشگاه لباس بود، فقط از اطلاعات فروشگاه استفاده کن. اگر نامشخص بود، بپرس برای شفاف‌سازی.
-
-    سبک پاسخ:
-    - کوتاه و ساده باش.
-    - مثل یک مشاور دلسوز حرف بزن، خشک و رسمی نباش.
-
-    اطلاعات قرارداد:
-    {json.dumps(contract, ensure_ascii=False)}
-
-    اطلاعات فروشگاه لباس:
-    {json.dumps(clothes_store, ensure_ascii=False)}
-
-    سوال کاربر: {question}
-
-    جواب را کوتاه و روان بده.
-    """
-
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
+# ----------------------------
+# تابع کمکی برای فراخوانی API گیتهاب
+# ----------------------------
+async def github_llm(prompt: str) -> str:
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
     payload = {
-        "model": "openai/gpt-4o-mini",  # GitHub models proxy OpenAI
+        "model": "openai/gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
     }
-
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 "https://models.github.ai/inference/chat/completions",
                 headers=headers,
                 json=payload,
             )
-
-        if response.status_code != 200:
-            return JSONResponse(status_code=response.status_code, content={
-                "error": f"GitHub model error: {response.text}"
-            })
-
+        response.raise_for_status()  # Raise error if not 200
         data = response.json()
-        answer = data["choices"][0]["message"]["content"]
-
-    except httpx.RequestError as e:
-        return JSONResponse(status_code=500, content={"error": f"Server request failed: {str(e)}"})
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Unexpected server error: {str(e)}"})
+        print(f"⚠️ GitHub API error: {e}")
+        return "متأسفانه مشکلی در دریافت پاسخ پیش آمد."
 
-    # Save chat log to Supabase
+
+# ----------------------------
+# Node برای پاسخ‌دهی
+# ----------------------------
+async def responder(state: QAState) -> dict:
+    question = state["question"]
+    combined_info = json.dumps(knowledge_data, ensure_ascii=False)  # تمام داده‌ها
+
+    prompt = f"""
+    تو یک دستیار هوشمند فارسی‌زبان هستی.
+    وظیفه‌ات اینه که تشخیص بدی سوال کاربر مربوط به کدوم حوزه است (مثلاً قرارداد,فروش متری، لباس، بیمه، مالیات یا خودرو)
+    و فقط از داده‌های همان حوزه پاسخ بده.
+
+    اگر سوال مبهم بود یا مشخص نبود مربوط به کدوم موضوعه، محترمانه بپرس برای شفاف‌سازی.
+
+    پاسخ باید:
+    - کوتاه، ساده و محاوره‌ای باشه
+    - از اطلاعات درست استفاده کنه، نه حدس زدن
+    - فقط به موضوع مرتبط جواب بده
+
+    🔸 داده‌های تو:
+    {combined_info}
+
+    🔸 سوال کاربر:
+    {question}
+
+    پاسخ را خیلی خلاصه، طبیعی و قابل فهم بده.
+    """
+    answer = await github_llm(prompt)
+    return {"answer": answer}
+
+
+# ----------------------------
+# ساخت گراف
+# ----------------------------
+graph = StateGraph(QAState)
+graph.add_node("responder", responder)
+graph.set_entry_point("responder")
+graph.set_finish_point("responder")
+
+# Compile the graph to make it runnable
+graph = graph.compile()
+
+
+# ----------------------------
+# API endpoint
+# ----------------------------
+@app.post("/ask")
+async def ask_question(request: Request):
+    body = await request.json()
+    question = body.get("question", "").strip()
+    if not question:
+        return JSONResponse(status_code=400, content={"error": "Question field is required."})
+
+    # اجرای گراف به صورت async
+    init_state = QAState({"question": question})
+    final_state = await graph.ainvoke(init_state)
+    answer = final_state.get("answer", "متأسفانه نتونستم پاسخ بدم.")
+
+    # ذخیره در Supabase
     try:
         supabase.table("chat_logs").insert({
             "question": question,
             "answer": answer
         }).execute()
     except Exception as db_err:
-        print("⚠️ Failed to save to Supabase:", db_err)
+        print("⚠️ DB save error:", db_err)
 
     return JSONResponse(content={"answer": answer})

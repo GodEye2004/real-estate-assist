@@ -1,41 +1,23 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi.params import Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import os, json
-from supabase import create_client, Client
-from dotenv import load_dotenv
-from langgraph.graph import StateGraph
 from typing import TypedDict
-import httpx
+import os, json, httpx
+from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio.session import AsyncSession
+from sqlalchemy.future import select
+import pdfplumber
+import docx
+from db_config import get_db
+from models import TenatData
 
-# ----------------------------
-# بارگذاری محیط
-# ----------------------------
+
 load_dotenv()
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not all([GITHUB_TOKEN, SUPABASE_URL, SUPABASE_KEY]):
-    raise ValueError("❌ Missing environment variables!")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ----------------------------
-# خواندن داده‌های دانش
-# ----------------------------
-knowledge_dir = "knowledge"
-knowledge_data = {}
-if not os.path.exists(knowledge_dir):
-    os.makedirs(knowledge_dir)
-
-for fname in os.listdir(knowledge_dir):
-    if fname.endswith(".json"):
-        topic = fname.replace(".json", "")
-        with open(os.path.join(knowledge_dir, fname), "r", encoding="utf-8") as f:
-            knowledge_data[topic] = json.load(f)
-
-print("✅ Loaded topics:", list(knowledge_data.keys()))
+if not GITHUB_TOKEN:
+    raise ValueError("❌ محیط GITHUB_TOKEN تنظیم نشده است!")
 
 # ----------------------------
 # FastAPI setup
@@ -49,17 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------------------------
+# حافظه موقت برای هر کاربر
+# ----------------------------
+user_sessions = {}  # user_id -> {"category": str, "data": dict}
 
 # ----------------------------
-# تعریف State
-# ----------------------------
-class QAState(TypedDict, total=False):
-    question: str
-    answer: str
-
-
-# ----------------------------
-# تابع کمکی برای فراخوانی API گیتهاب
+# LLM
 # ----------------------------
 async def github_llm(prompt: str) -> str:
     headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
@@ -75,79 +53,159 @@ async def github_llm(prompt: str) -> str:
                 headers=headers,
                 json=payload,
             )
-        response.raise_for_status()  # Raise error if not 200
+        response.raise_for_status()
+
+        # بررسی اینکه پاسخ خالی نباشه
+        if not response.content.strip():
+            return "⚠️ پاسخ از سرور دریافت نشد."
+
+        # بررسی JSON معتبر
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
+
+    except httpx.HTTPStatusError as e:
+        print(f"⚠️ GitHub API HTTP error: {e}")
+        return f"⚠️ خطای HTTP: {e.response.status_code}"
+    except json.JSONDecodeError:
+        print("⚠️ پاسخ سرور JSON معتبر نیست")
+        return "⚠️ فرمت پاسخ سرور نامعتبر است."
     except Exception as e:
         print(f"⚠️ GitHub API error: {e}")
         return "متأسفانه مشکلی در دریافت پاسخ پیش آمد."
 
+# ----------------------------
+# انتخاب کتگوری
+# ----------------------------
+@app.post("/select_category")
+async def select_category(request: Request, db: AsyncSession = Depends(get_db)):
+    body = await request.json()
+    user_id = body.get("user_id")
+    category = body.get("category")
+
+    if not user_id or not category:
+        return  JSONResponse(status_code=400, content={"error":"user_id and category are required"})
+
+    existing = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
+    record = existing.scalars().first()
+
+    if record:
+        record.category = category
+    else:
+        record = TenatData(user_id=user_id, category=category, data={})
+        db.add(record)
+
+    await db.commit()
+    return {"message": f"'{category}' active for you"}
 
 # ----------------------------
-# Node برای پاسخ‌دهی
+# آپلود داده
 # ----------------------------
-async def responder(state: QAState) -> dict:
-    question = state["question"]
-    combined_info = json.dumps(knowledge_data, ensure_ascii=False)  # تمام داده‌ها
+# @app.post("/upload_json")
+# async def upload_json(
+#     user_id: str = Form(...),
+#     category: str = Form(...),
+#     file: UploadFile = File(...),
+#     db: AsyncSession = Depends(get_db)
+# ):
+#     if not file.filename.endswith(".json"):
+#         return {"error": "file must be json"}
+#
+#     content = await file.read()
+#     try:
+#         json_data = json.loads(content)
+#     except Exception as e:
+#         return {"error": "the json format not true"}
+#
+#     existing = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
+#     record = existing.scalars().first()
+#
+#     if record:
+#         record.category = category
+#         record.data = json_data
+#     else:
+#         record = TenatData(user_id=user_id, category=category, data=json_data)
+#         db.add(record)
+#
+#     await db.commit()
+#     return {"message": f"json file for '{category}' has been uploaded"}
+
+@app.post("/upload_json")
+async def upload_json(
+    user_id: str = Form(...),
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    # استخراج متن بر اساس نوع فایل
+    content = await file.read()
+    text_data = ""
+
+    if file.filename.endswith(".json"):
+        try:
+            json_data = json.loads(content)
+        except Exception:
+            return {"error": "JSON format is not valid"}
+    elif file.filename.endswith(".pdf"):
+        import io
+        pdf_file = io.BytesIO(content)
+        with pdfplumber.open(pdf_file) as pdf:
+            text_data = "\n".join([page.extract_text() or "" for page in pdf.pages])
+        json_data = {"text": text_data}
+    elif file.filename.endswith(".docx"):
+        import io
+        doc_file = io.BytesIO(content)
+        doc = docx.Document(doc_file)
+        text_data = "\n".join([para.text for para in doc.paragraphs])
+        json_data = {"text": text_data}
+    elif file.filename.endswith(".txt"):
+        text_data = content.decode("utf-8")
+        json_data = {"text": text_data}
+    else:
+        return {"error": "Unsupported file type. Only JSON, PDF, DOCX, TXT allowed."}
+
+    # ذخیره یا بروزرسانی در دیتابیس
+    existing = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
+    record = existing.scalars().first()
+
+    if record:
+        record.category = category
+        record.data = json_data
+    else:
+        record = TenatData(user_id=user_id, category=category, data=json_data)
+        db.add(record)
+
+    await db.commit()
+    return {"message": f"File for '{category}' has been uploaded and converted to JSON."}
+
+
+
+# ----------------------------
+# پرسیدن سؤال
+# ----------------------------
+@app.post("/ask")
+async def ask(request: Request, db: AsyncSession = Depends(get_db)):
+    body = await request.json()
+    user_id = body.get("user_id")
+    question = body.get("question")
+
+    if not user_id or not question:
+        return JSONResponse(status_code=400, content={"error": "user_id and question is required."})
+
+    result = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
+    record = result.scalars().first()
+
+    if not record or not record.data:
+        return JSONResponse(status_code=400, content={"error": "there is no content for this user."})
 
     prompt = f"""
-    تو یک دستیار هوشمند فارسی‌زبان هستی.
-    وظیفه‌ات اینه که تشخیص بدی سوال کاربر مربوط به کدوم حوزه است (مثلاً قرارداد,فروش متری، لباس، بیمه، مالیات یا خودرو)
-    و فقط از داده‌های همان حوزه پاسخ بده.
+    تو یک دستیار فارسی هستی.
+    کاربر از کتگوری "{record.category}" استفاده می‌کند.
+    از داده‌های زیر برای پاسخ به سؤال استفاده کن:
+    {json.dumps(record.data, ensure_ascii=False, indent=2)}
 
-    اگر سوال مبهم بود یا مشخص نبود مربوط به کدوم موضوعه، محترمانه بپرس برای شفاف‌سازی.
+    سوال کاربر: {question}
 
-    پاسخ باید:
-    - کوتاه، ساده و محاوره‌ای باشه
-    - از اطلاعات درست استفاده کنه، نه حدس زدن
-    - فقط به موضوع مرتبط جواب بده
-
-    🔸 داده‌های تو:
-    {combined_info}
-
-    🔸 سوال کاربر:
-    {question}
-
-    پاسخ را خیلی خلاصه، طبیعی و قابل فهم بده.
+    پاسخ کوتاه، دقیق و طبیعی بده.
     """
     answer = await github_llm(prompt)
     return {"answer": answer}
-
-
-# ----------------------------
-# ساخت گراف
-# ----------------------------
-graph = StateGraph(QAState)
-graph.add_node("responder", responder)
-graph.set_entry_point("responder")
-graph.set_finish_point("responder")
-
-# Compile the graph to make it runnable
-graph = graph.compile()
-
-
-# ----------------------------
-# API endpoint
-# ----------------------------
-@app.post("/ask")
-async def ask_question(request: Request):
-    body = await request.json()
-    question = body.get("question", "").strip()
-    if not question:
-        return JSONResponse(status_code=400, content={"error": "Question field is required."})
-
-    # اجرای گراف به صورت async
-    init_state = QAState({"question": question})
-    final_state = await graph.ainvoke(init_state)
-    answer = final_state.get("answer", "متأسفانه نتونستم پاسخ بدم.")
-
-    # ذخیره در Supabase
-    try:
-        supabase.table("chat_logs").insert({
-            "question": question,
-            "answer": answer
-        }).execute()
-    except Exception as db_err:
-        print("⚠️ DB save error:", db_err)
-
-    return JSONResponse(content={"answer": answer})

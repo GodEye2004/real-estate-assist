@@ -23,6 +23,9 @@ if not GITHUB_TOKEN:
 # FastAPI setup
 # ----------------------------
 app = FastAPI()
+
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
 
 # ----------------------------
 # حافظه موقت برای هر کاربر

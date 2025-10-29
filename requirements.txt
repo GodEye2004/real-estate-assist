@@ -1,5 +1,8 @@
 fastapi
-uvicorn
-openai
-supabase
+uvicorn[standard]
+sqlalchemy>=2.0
+asyncpg
 python-dotenv
+httpx
+pdfplumber
+python-docx

@@ -12,3 +12,5 @@ class TenatData(Base):
     user_id = Column(String, index=True, nullable=false)
     category = Column(String, nullable=false)
     data = Column(JSON, nullable=False)
+
+

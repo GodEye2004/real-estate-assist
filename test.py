@@ -1,3 +1,5 @@
+import io
+
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.params import Depends
 from fastapi.responses import JSONResponse
@@ -5,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import TypedDict
 import os, json, httpx
 from dotenv import load_dotenv
+from requests.compat import chardet
 from sqlalchemy.ext.asyncio.session import AsyncSession
 from sqlalchemy.future import select
 import pdfplumber
@@ -142,47 +145,63 @@ async def upload_json(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db)
 ):
-    # استخراج متن بر اساس نوع فایل
     content = await file.read()
     text_data = ""
+    json_data = {}
 
-    if file.filename.endswith(".json"):
-        try:
-            json_data = json.loads(content)
-        except Exception:
-            return {"error": "JSON format is not valid"}
-    elif file.filename.endswith(".pdf"):
-        import io
-        pdf_file = io.BytesIO(content)
-        with pdfplumber.open(pdf_file) as pdf:
-            text_data = "\n".join([page.extract_text() or "" for page in pdf.pages])
-        json_data = {"text": text_data}
-    elif file.filename.endswith(".docx"):
-        import io
-        doc_file = io.BytesIO(content)
-        doc = docx.Document(doc_file)
-        text_data = "\n".join([para.text for para in doc.paragraphs])
-        json_data = {"text": text_data}
-    elif file.filename.endswith(".txt"):
-        text_data = content.decode("utf-8")
-        json_data = {"text": text_data}
-    else:
-        return {"error": "Unsupported file type. Only JSON, PDF, DOCX, TXT allowed."}
+    filename = file.filename.lower()
 
-    # ذخیره یا بروزرسانی در دیتابیس
-    existing = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
-    record = existing.scalars().first()
+    try:
+        if filename.endswith(".json"):
+            # مستقیماً JSON خوانده شود
+            json_data = json.loads(content.decode("utf-8", errors="ignore"))
 
-    if record:
-        record.category = category
-        record.data = json_data
-    else:
-        record = TenatData(user_id=user_id, category=category, data=json_data)
-        db.add(record)
+        elif filename.endswith(".pdf"):
+            # استخراج متن از PDF با پشتیبانی از فارسی
+            pdf_file = io.BytesIO(content)
+            with pdfplumber.open(pdf_file) as pdf:
+                text_pages = []
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    text = text.replace("\u200c", "").strip()  # حذف نیم‌فاصله‌ی نامناسب
+                    text_pages.append(text)
+                text_data = "\n".join(text_pages)
+            json_data = {"text": text_data}
 
-    await db.commit()
-    return {"message": f"File for '{category}' has been uploaded and converted to JSON."}
+        elif filename.endswith(".docx"):
+            # استخراج متن از Word با حفظ ترتیب و خط جدید
+            doc_file = io.BytesIO(content)
+            document = docx.Document(doc_file)
+            paragraphs = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+            text_data = "\n".join(paragraphs)
+            json_data = {"text": text_data}
 
+        elif filename.endswith(".txt"):
+            # تشخیص خودکار انکودینگ برای پشتیبانی از فارسی
+            detected = chardet.detect(content)
+            encoding = detected["encoding"] or "utf-8"
+            text_data = content.decode(encoding, errors="ignore")
+            json_data = {"text": text_data}
+
+        else:
+            return {"error": "Unsupported file type. Only JSON, PDF, DOCX, TXT allowed."}
+
+        # ذخیره یا بروزرسانی در دیتابیس
+        existing = await db.execute(select(TenatData).where(TenatData.user_id == user_id))
+        record = existing.scalars().first()
+
+        if record:
+            record.category = category
+            record.data = json_data
+        else:
+            record = TenatData(user_id=user_id, category=category, data=json_data)
+            db.add(record)
+
+        await db.commit()
+        return {"message": f"File for '{category}' uploaded successfully and converted to JSON."}
+
+    except Exception as e:
+        return {"error": f"Failed to process file: {str(e)}"}
 
 
 # ----------------------------

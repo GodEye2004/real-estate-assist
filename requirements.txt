@@ -6,3 +6,4 @@ python-dotenv
 httpx
 pdfplumber
 python-docx
+chardet

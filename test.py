@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import TypedDict
 import os, json, httpx
 from dotenv import load_dotenv
-from requests.compat import chardet
+import chardet
 from sqlalchemy.ext.asyncio.session import AsyncSession
 from sqlalchemy.future import select
 import pdfplumber

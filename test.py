@@ -234,3 +234,9 @@ async def ask(request: Request, db: AsyncSession = Depends(get_db)):
     """
     answer = await github_llm(prompt)
     return {"answer": answer}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("test:app", host="0.0.0.0", port=port)

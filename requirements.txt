@@ -7,3 +7,4 @@ httpx
 pdfplumber
 python-docx
 chardet
+python-multipart
